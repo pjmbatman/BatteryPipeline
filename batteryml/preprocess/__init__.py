@@ -1,6 +1,7 @@
 import logging
 from .download import DOWNLOAD_LINKS, download_file
 from .preprocess_CALCE import CALCEPreprocessor
+from .preprocess_EVERLASTING import EVERLASTINGPreprocessor
 from .preprocess_HNEI import HNEIPreprocessor
 from .preprocess_HUST import HUSTPreprocessor
 from .preprocess_MATR import MATRPreprocessor
@@ -17,6 +18,6 @@ logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s')
 
 SUPPORTED_SOURCES = {
-    'DATASETS': ['CALCE', 'HNEI', 'HUST', 'MATR', 'NASA', 'OX', 'RWTH', 'SNL', 'UCL', 'UL_PUR'],
+    'DATASETS': ['CALCE', 'EVERLASTING', 'HNEI', 'HUST', 'MATR', 'NASA', 'OX', 'RWTH', 'SNL', 'UCL', 'UL_PUR'],
     'CYCLERS': ['ARBIN', 'BATTERYARCHIVE', "BIOLOGIC",  'INDIGO',  "LANDT", "MACCOR", 'NEWARE', 'NOVONIX']
 }
