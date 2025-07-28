@@ -56,6 +56,10 @@ DOWNLOAD_LINKS = {
         ('https://data.4tu.nl/ndownloader/items/6fb69e7e-dd47-439f-b7a9-314f6b6a6d29/versions/1',
          'EVERLASTING_Battery_Dataset.zip')
     ],
+    'OX': [
+        ('https://ora.ox.ac.uk/objects/uuid:03ba4b01-cfed-46d3-9b1a-7d4a7bdf6fac/files/m5ac36a1e2073852e4f1f7dee647909a7',
+         'Oxford_Battery_Degradation_Dataset_1.mat')
+    ],
 }
 
 
@@ -81,14 +85,20 @@ def download_file(url,
         print(f'[INFO] {filename} already exists. Skip it.')
         return
     with open(filename, 'wb') as f:
-        response = requests.get(url, stream=True, verify=False)
+        response = requests.get(url, stream=True, verify=False, timeout=30)
         if total_length is None:
             total_length = response.headers.get('content-length')
         if response.status_code != 200:
             raise ValueError(
                 f'Network error: {response.status_code}! URL: {url}')
         if total_length is None:
-            f.write(response.content)
+            print(f'Downloading {filename} (size unknown)...')
+            downloaded = 0
+            for data in response.iter_content(chunk_size=chunk_size):
+                f.write(data)
+                downloaded += len(data)
+                print(f'\rDownloaded: {memory2str(downloaded)}', end='', flush=True)
+            print()  # New line after download completes
         else:
             downloaded, total_length = 0, int(total_length)
             total_size = memory2str(total_length)
