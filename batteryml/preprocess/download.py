@@ -50,7 +50,7 @@ DOWNLOAD_LINKS = {
     ],
     'UCL': [
         ('https://rdr.ucl.ac.uk/ndownloader/files/23140433',
-         'UCL_Battery_Dataset.zip')
+         'UCL_Battery_Dataset.csv')
     ],
     'EVERLASTING': [
         ('https://data.4tu.nl/ndownloader/items/6fb69e7e-dd47-439f-b7a9-314f6b6a6d29/versions/1',
