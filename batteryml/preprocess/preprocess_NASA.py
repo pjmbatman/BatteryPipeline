@@ -290,8 +290,8 @@ def load_nasa_battery(file_path: Path) -> BatteryData:
     battery_data = data[battery_name]
     cycles = battery_data[0, 0]['cycle'][0]  # Shape is (1, 616) so we need [0] to get (616,)
     
-    # Group cycles by charge-discharge-impedance triplets
-    cycle_groups = group_nasa_cycles(cycles)
+    # Group cycles by charge-discharge pairs and collect impedance data separately
+    cycle_groups, impedance_data_list = group_nasa_cycles(cycles)
     
     cycle_data = []
     for cycle_num, cycle_group in enumerate(cycle_groups, 1):
@@ -299,32 +299,92 @@ def load_nasa_battery(file_path: Path) -> BatteryData:
         if unified_cycle:
             cycle_data.append(unified_cycle)
     
+    # Process impedance data into additional_data
+    additional_data = {}
+    if impedance_data_list:
+        additional_data['impedance_measurements'] = process_impedance_data(impedance_data_list)
+    
     return BatteryData(
         cell_id=f'NASA_{battery_name}',
         cycle_data=cycle_data,
+        additional_data=additional_data,
         **metadata  # Unpack all metadata from README-based lookup
     )
 
 
+def process_impedance_data(impedance_data_list):
+    """Process impedance data into structured format for additional_data"""
+    processed_impedance = []
+    
+    for i, impedance_cycle in enumerate(impedance_data_list):
+        try:
+            impedance_measurements = impedance_cycle['data'].flat[0] if hasattr(impedance_cycle['data'], 'flat') else impedance_cycle['data'][0, 0]
+            
+            impedance_entry = {'measurement_number': i + 1}
+            
+            # Extract key scalar impedance values only
+            scalar_fields = ['Rectified_impedance', 'Re', 'Rct']
+            
+            for field in scalar_fields:
+                if field in impedance_measurements.dtype.names:
+                    field_data = impedance_measurements[field]
+                    if field_data.ndim > 1:
+                        field_data = field_data.flatten()
+                    
+                    # Convert to real values and take mean if it's an array
+                    if len(field_data) > 0:
+                        if np.iscomplexobj(field_data):
+                            field_data = np.real(field_data)  # Take real part of complex numbers
+                        impedance_entry[field.lower()] = float(np.mean(field_data))
+            
+            # Add summary statistics for complex Battery_impedance if available
+            if 'Battery_impedance' in impedance_measurements.dtype.names:
+                battery_imp = impedance_measurements['Battery_impedance']
+                if battery_imp.ndim > 1:
+                    battery_imp = battery_imp.flatten()
+                if len(battery_imp) > 0:
+                    impedance_entry['battery_impedance_magnitude_mean'] = float(np.mean(np.abs(battery_imp)))
+                    impedance_entry['battery_impedance_real_mean'] = float(np.mean(np.real(battery_imp)))
+                    impedance_entry['battery_impedance_imag_mean'] = float(np.mean(np.imag(battery_imp)))
+            
+            processed_impedance.append(impedance_entry)
+        except Exception as e:
+            # Skip problematic impedance measurements
+            continue
+    
+    return processed_impedance
+
+
 def group_nasa_cycles(cycles):
-    """Group NASA cycles into charge-discharge-impedance triplets"""
+    """Group NASA cycles into charge-discharge pairs and collect impedance data separately"""
     cycle_groups = []
-    current_group = {'charge': None, 'discharge': None, 'impedance': None}
+    impedance_data_list = []
+    
+    charge_cycle = None
     
     for i, cycle in enumerate(cycles):
-        # Get cycle type
-        cycle_type = get_cycle_type(cycle)
-        
-        if cycle_type in ['charge', 'discharge', 'impedance']:
-            current_group[cycle_type] = cycle
+        try:
+            # Get cycle type
+            cycle_type = get_cycle_type(cycle)
             
-            # If we have both charge and discharge, create a complete cycle
-            # (impedance is optional)
-            if current_group['charge'] and current_group['discharge']:
-                cycle_groups.append(current_group.copy())
-                current_group = {'charge': None, 'discharge': None, 'impedance': None}
+            if cycle_type == 'charge':
+                charge_cycle = cycle
+            elif cycle_type == 'discharge':
+                # When we find discharge after charge, create a charge-discharge pair
+                if charge_cycle:
+                    cycle_groups.append({'charge': charge_cycle, 'discharge': cycle})
+                    charge_cycle = None  # Reset for next pair
+                else:
+                    # Discharge without preceding charge - create discharge-only cycle
+                    cycle_groups.append({'charge': None, 'discharge': cycle})
+            elif cycle_type == 'impedance':
+                # Add impedance data to separate list
+                impedance_data_list.append(cycle)
+        except Exception as e:
+            # Skip problematic cycles
+            continue
     
-    return cycle_groups
+    return cycle_groups, impedance_data_list
 
 
 def get_cycle_type(cycle):
@@ -343,149 +403,95 @@ def get_cycle_type(cycle):
 
 
 def create_unified_cycle_data(cycle_group, cycle_number):
-    """Create unified CycleData from charge-discharge-impedance group"""
+    """Create unified CycleData from charge-discharge pair"""
     charge_cycle = cycle_group.get('charge')
     discharge_cycle = cycle_group.get('discharge')
-    impedance_cycle = cycle_group.get('impedance')
     
     if not discharge_cycle:
         return None  # Need at least discharge data
     
-    # Extract data from both charge and discharge cycles
-    all_voltage = []
-    all_current = []
-    all_temperature = []
-    all_time = []
-    all_charge_capacity = []
-    all_discharge_capacity = []
+    try:
+        # Extract discharge data (primary data)
+        discharge_measurements = discharge_cycle['data'].flat[0] if hasattr(discharge_cycle['data'], 'flat') else discharge_cycle['data'][0, 0]
+        
+        # Get measurement arrays from discharge cycle
+        voltage = discharge_measurements['Voltage_measured']
+        if voltage.ndim > 1:
+            voltage = voltage.flatten()
+        
+        current = discharge_measurements['Current_measured']
+        if current.ndim > 1:
+            current = current.flatten()
+        
+        temperature = discharge_measurements['Temperature_measured']
+        if temperature.ndim > 1:
+            temperature = temperature.flatten()
+        
+        time = discharge_measurements['Time']
+        if time.ndim > 1:
+            time = time.flatten()
+        
+        # Check if arrays have data
+        if len(voltage) == 0 or len(current) == 0 or len(time) == 0:
+            return None
+        
+        # Get discharge capacity
+        total_capacity = discharge_measurements['Capacity']
+        if total_capacity.ndim > 0:
+            total_capacity_value = float(total_capacity.flat[0])
+        else:
+            total_capacity_value = float(total_capacity)
+    except (IndexError, KeyError, ValueError) as e:
+        return None  # Skip cycles with problematic data
     
-    # Process charge cycle first (if available)
+    # Calculate cumulative discharge capacity
+    if len(time) > 1:
+        discharge_capacity = np.linspace(total_capacity_value, 0, len(time))
+    else:
+        discharge_capacity = [total_capacity_value]
+    
+    # Extract charge capacity (if available)
+    charge_capacity = [0.0] * len(voltage)  # Default
     if charge_cycle:
         try:
             charge_measurements = charge_cycle['data'].flat[0] if hasattr(charge_cycle['data'], 'flat') else charge_cycle['data'][0, 0]
-            
-            charge_voltage = charge_measurements['Voltage_measured']
-            if charge_voltage.ndim > 1:
-                charge_voltage = charge_voltage.flatten()
-            
+            charge_time = charge_measurements['Time']
+            if charge_time.ndim > 1:
+                charge_time = charge_time.flatten()
             charge_current = charge_measurements['Current_measured']
             if charge_current.ndim > 1:
                 charge_current = charge_current.flatten()
             
-            charge_temperature = charge_measurements['Temperature_measured']
-            if charge_temperature.ndim > 1:
-                charge_temperature = charge_temperature.flatten()
-            
-            charge_time = charge_measurements['Time']
-            if charge_time.ndim > 1:
-                charge_time = charge_time.flatten()
-            
-            # Calculate charge capacity using CALCE-style integration
-            charge_capacity = calc_Q_nasa(charge_current, charge_time, is_charge=True)
-            discharge_capacity_charge = np.zeros_like(charge_capacity)  # No discharge during charge
-            
-            # Add charge data
-            all_voltage.extend(charge_voltage.tolist())
-            all_current.extend(charge_current.tolist()) 
-            all_temperature.extend(charge_temperature.tolist())
-            all_time.extend(charge_time.tolist())
-            all_charge_capacity.extend(charge_capacity.tolist())
-            all_discharge_capacity.extend(discharge_capacity_charge.tolist())
-            
-        except Exception as e:
-            print(f"Warning: Could not process charge cycle: {e}")
+            # Calculate charge capacity from current integration
+            if len(charge_time) > 1 and len(charge_current) > 0:
+                charge_capacity_calc = []
+                cumulative_charge = 0
+                for i in range(1, len(charge_time)):
+                    if charge_current[i] > 0:  # Charging current
+                        cumulative_charge += charge_current[i] * (charge_time[i] - charge_time[i-1]) / 3600
+                    charge_capacity_calc.append(cumulative_charge)
+                
+                # Interpolate to match discharge data length
+                if len(charge_capacity_calc) > 0:
+                    charge_capacity = np.interp(
+                        np.linspace(0, 1, len(voltage)),
+                        np.linspace(0, 1, len(charge_capacity_calc)),
+                        charge_capacity_calc
+                    ).tolist()
+        except:
+            pass  # Keep default charge capacity
     
-    # Process discharge cycle
-    try:
-        discharge_measurements = discharge_cycle['data'].flat[0] if hasattr(discharge_cycle['data'], 'flat') else discharge_cycle['data'][0, 0]
-        
-        discharge_voltage = discharge_measurements['Voltage_measured']
-        if discharge_voltage.ndim > 1:
-            discharge_voltage = discharge_voltage.flatten()
-        
-        discharge_current = discharge_measurements['Current_measured']
-        if discharge_current.ndim > 1:
-            discharge_current = discharge_current.flatten()
-        
-        discharge_temperature = discharge_measurements['Temperature_measured']
-        if discharge_temperature.ndim > 1:
-            discharge_temperature = discharge_temperature.flatten()
-        
-        discharge_time = discharge_measurements['Time']
-        if discharge_time.ndim > 1:
-            discharge_time = discharge_time.flatten()
-        
-        # Adjust discharge time to continue from charge time
-        time_offset = all_time[-1] if all_time else 0
-        discharge_time_adjusted = discharge_time + time_offset
-        
-        # Calculate discharge capacity using CALCE-style integration  
-        discharge_capacity = calc_Q_nasa(discharge_current, discharge_time, is_charge=False)
-        charge_capacity_discharge = np.zeros_like(discharge_capacity)  # No charge during discharge
-        
-        # Add discharge data
-        all_voltage.extend(discharge_voltage.tolist())
-        all_current.extend(discharge_current.tolist())
-        all_temperature.extend(discharge_temperature.tolist())
-        all_time.extend(discharge_time_adjusted.tolist())
-        all_charge_capacity.extend(charge_capacity_discharge.tolist())
-        all_discharge_capacity.extend(discharge_capacity.tolist())
-        
-    except Exception as e:
-        print(f"Error processing discharge cycle: {e}")
-        return None
-    
-    # Process impedance data
+    # Set internal resistance to None since impedance is handled separately
     internal_resistance = None
-    impedance_data = {}
-    
-    if impedance_cycle:
-        try:
-            impedance_measurements = impedance_cycle['data'].flat[0] if hasattr(impedance_cycle['data'], 'flat') else impedance_cycle['data'][0, 0]
-            
-            # Extract impedance fields
-            impedance_fields = [
-                'Sense_current', 'Battery_current', 'Current_ratio',
-                'Battery_impedance', 'Rectified_impedance', 'Re', 'Rct'
-            ]
-            
-            for field in impedance_fields:
-                if field in impedance_measurements.dtype.names:
-                    field_data = impedance_measurements[field]
-                    if field_data.ndim > 1:
-                        field_data = field_data.flatten()
-                    impedance_data[field.lower()] = field_data.tolist()
-            
-            # Use rectified impedance mean as internal resistance
-            if 'rectified_impedance' in impedance_data and len(impedance_data['rectified_impedance']) > 0:
-                internal_resistance = float(np.mean(impedance_data['rectified_impedance']))
-            elif 're' in impedance_data and len(impedance_data['re']) > 0:
-                internal_resistance = float(np.mean(impedance_data['re']))
-        except Exception as e:
-            print(f"Warning: Could not process impedance cycle: {e}")
     
     # Create unified cycle data
     return CycleData(
         cycle_number=cycle_number,
-        voltage_in_V=all_voltage,
-        current_in_A=all_current,  
-        temperature_in_C=all_temperature,
-        discharge_capacity_in_Ah=all_discharge_capacity,
-        charge_capacity_in_Ah=all_charge_capacity,
-        time_in_s=all_time,
-        internal_resistance_in_ohm=internal_resistance,
-        **impedance_data  # Add impedance data as additional fields
+        voltage_in_V=voltage.tolist(),
+        current_in_A=current.tolist(),
+        temperature_in_C=temperature.tolist(),
+        discharge_capacity_in_Ah=discharge_capacity.tolist(),
+        charge_capacity_in_Ah=charge_capacity,
+        time_in_s=time.tolist(),
+        internal_resistance_in_ohm=internal_resistance
     )
-
-
-def calc_Q_nasa(I, t, is_charge):
-    """Calculate capacity like CALCE dataset - similar to calc_Q function"""
-    Q = np.zeros_like(I)
-    for i in range(1, len(I)):
-        if is_charge and I[i] > 0:  # Charging current (positive)
-            Q[i] = Q[i-1] + I[i] * (t[i] - t[i-1]) / 3600
-        elif not is_charge and I[i] < 0:  # Discharging current (negative)
-            Q[i] = Q[i-1] - I[i] * (t[i] - t[i-1]) / 3600  # Note: -I[i] because current is negative
-        else:
-            Q[i] = Q[i-1]  # No change in capacity
-    return Q
