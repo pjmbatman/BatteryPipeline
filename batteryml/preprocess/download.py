@@ -43,6 +43,10 @@ DOWNLOAD_LINKS = {
     'RWTH': [
         ('https://publications.rwth-aachen.de/record/818642/files/Rawdata.zip',
          'RWTH.zip')
+    ],
+    'NASA': [
+        ('https://phm-datasets.s3.amazonaws.com/NASA/5.+Battery+Data+Set.zip',
+         'NASA_Battery_Dataset.zip')
     ]
 }
 

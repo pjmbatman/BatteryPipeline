@@ -15,6 +15,6 @@ logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s')
 
 SUPPORTED_SOURCES = {
-    'DATASETS': ['CALCE', 'HNEI', 'HUST', 'MATR', 'OX', 'RWTH', 'SNL', 'UL_PUR'],
+    'DATASETS': ['CALCE', 'HNEI', 'HUST', 'MATR', 'NASA', 'OX', 'RWTH', 'SNL', 'UL_PUR'],
     'CYCLERS': ['ARBIN', 'BATTERYARCHIVE', "BIOLOGIC",  'INDIGO',  "LANDT", "MACCOR", 'NEWARE', 'NOVONIX']
 }
