@@ -351,69 +351,89 @@ def create_unified_cycle_data(cycle_group, cycle_number):
     if not discharge_cycle:
         return None  # Need at least discharge data
     
-    # Extract discharge data (primary data)
-    discharge_measurements = discharge_cycle['data'].flat[0] if hasattr(discharge_cycle['data'], 'flat') else discharge_cycle['data'][0, 0]
+    # Extract data from both charge and discharge cycles
+    all_voltage = []
+    all_current = []
+    all_temperature = []
+    all_time = []
+    all_charge_capacity = []
+    all_discharge_capacity = []
     
-    # Get measurement arrays from discharge cycle
-    voltage = discharge_measurements['Voltage_measured']
-    if voltage.ndim > 1:
-        voltage = voltage.flatten()
-    
-    current = discharge_measurements['Current_measured']
-    if current.ndim > 1:
-        current = current.flatten()
-    
-    temperature = discharge_measurements['Temperature_measured']
-    if temperature.ndim > 1:
-        temperature = temperature.flatten()
-    
-    time = discharge_measurements['Time']
-    if time.ndim > 1:
-        time = time.flatten()
-    
-    # Get discharge capacity
-    total_capacity = discharge_measurements['Capacity']
-    if total_capacity.ndim > 0:
-        total_capacity_value = float(total_capacity.flat[0])
-    else:
-        total_capacity_value = float(total_capacity)
-    
-    # Calculate cumulative discharge capacity
-    if len(time) > 1:
-        discharge_capacity = np.linspace(total_capacity_value, 0, len(time))
-    else:
-        discharge_capacity = [total_capacity_value]
-    
-    # Extract charge capacity (if available)
-    charge_capacity = [0.0] * len(voltage)  # Default
+    # Process charge cycle first (if available)
     if charge_cycle:
         try:
             charge_measurements = charge_cycle['data'].flat[0] if hasattr(charge_cycle['data'], 'flat') else charge_cycle['data'][0, 0]
-            charge_time = charge_measurements['Time']
-            if charge_time.ndim > 1:
-                charge_time = charge_time.flatten()
+            
+            charge_voltage = charge_measurements['Voltage_measured']
+            if charge_voltage.ndim > 1:
+                charge_voltage = charge_voltage.flatten()
+            
             charge_current = charge_measurements['Current_measured']
             if charge_current.ndim > 1:
                 charge_current = charge_current.flatten()
             
-            # Calculate charge capacity from current integration
-            if len(charge_time) > 1 and len(charge_current) > 0:
-                charge_capacity_calc = []
-                cumulative_charge = 0
-                for i in range(1, len(charge_time)):
-                    if charge_current[i] > 0:  # Charging current
-                        cumulative_charge += charge_current[i] * (charge_time[i] - charge_time[i-1]) / 3600
-                    charge_capacity_calc.append(cumulative_charge)
-                
-                # Interpolate to match discharge data length
-                if len(charge_capacity_calc) > 0:
-                    charge_capacity = np.interp(
-                        np.linspace(0, 1, len(voltage)),
-                        np.linspace(0, 1, len(charge_capacity_calc)),
-                        charge_capacity_calc
-                    ).tolist()
-        except:
-            pass  # Keep default charge capacity
+            charge_temperature = charge_measurements['Temperature_measured']
+            if charge_temperature.ndim > 1:
+                charge_temperature = charge_temperature.flatten()
+            
+            charge_time = charge_measurements['Time']
+            if charge_time.ndim > 1:
+                charge_time = charge_time.flatten()
+            
+            # Calculate charge capacity using CALCE-style integration
+            charge_capacity = calc_Q_nasa(charge_current, charge_time, is_charge=True)
+            discharge_capacity_charge = np.zeros_like(charge_capacity)  # No discharge during charge
+            
+            # Add charge data
+            all_voltage.extend(charge_voltage.tolist())
+            all_current.extend(charge_current.tolist()) 
+            all_temperature.extend(charge_temperature.tolist())
+            all_time.extend(charge_time.tolist())
+            all_charge_capacity.extend(charge_capacity.tolist())
+            all_discharge_capacity.extend(discharge_capacity_charge.tolist())
+            
+        except Exception as e:
+            print(f"Warning: Could not process charge cycle: {e}")
+    
+    # Process discharge cycle
+    try:
+        discharge_measurements = discharge_cycle['data'].flat[0] if hasattr(discharge_cycle['data'], 'flat') else discharge_cycle['data'][0, 0]
+        
+        discharge_voltage = discharge_measurements['Voltage_measured']
+        if discharge_voltage.ndim > 1:
+            discharge_voltage = discharge_voltage.flatten()
+        
+        discharge_current = discharge_measurements['Current_measured']
+        if discharge_current.ndim > 1:
+            discharge_current = discharge_current.flatten()
+        
+        discharge_temperature = discharge_measurements['Temperature_measured']
+        if discharge_temperature.ndim > 1:
+            discharge_temperature = discharge_temperature.flatten()
+        
+        discharge_time = discharge_measurements['Time']
+        if discharge_time.ndim > 1:
+            discharge_time = discharge_time.flatten()
+        
+        # Adjust discharge time to continue from charge time
+        time_offset = all_time[-1] if all_time else 0
+        discharge_time_adjusted = discharge_time + time_offset
+        
+        # Calculate discharge capacity using CALCE-style integration  
+        discharge_capacity = calc_Q_nasa(discharge_current, discharge_time, is_charge=False)
+        charge_capacity_discharge = np.zeros_like(discharge_capacity)  # No charge during discharge
+        
+        # Add discharge data
+        all_voltage.extend(discharge_voltage.tolist())
+        all_current.extend(discharge_current.tolist())
+        all_temperature.extend(discharge_temperature.tolist())
+        all_time.extend(discharge_time_adjusted.tolist())
+        all_charge_capacity.extend(charge_capacity_discharge.tolist())
+        all_discharge_capacity.extend(discharge_capacity.tolist())
+        
+    except Exception as e:
+        print(f"Error processing discharge cycle: {e}")
+        return None
     
     # Process impedance data
     internal_resistance = None
@@ -441,18 +461,31 @@ def create_unified_cycle_data(cycle_group, cycle_number):
                 internal_resistance = float(np.mean(impedance_data['rectified_impedance']))
             elif 're' in impedance_data and len(impedance_data['re']) > 0:
                 internal_resistance = float(np.mean(impedance_data['re']))
-        except:
-            pass  # Keep impedance_data empty
+        except Exception as e:
+            print(f"Warning: Could not process impedance cycle: {e}")
     
     # Create unified cycle data
     return CycleData(
         cycle_number=cycle_number,
-        voltage_in_V=voltage.tolist(),
-        current_in_A=current.tolist(),
-        temperature_in_C=temperature.tolist(),
-        discharge_capacity_in_Ah=discharge_capacity.tolist(),
-        charge_capacity_in_Ah=charge_capacity,
-        time_in_s=time.tolist(),
+        voltage_in_V=all_voltage,
+        current_in_A=all_current,  
+        temperature_in_C=all_temperature,
+        discharge_capacity_in_Ah=all_discharge_capacity,
+        charge_capacity_in_Ah=all_charge_capacity,
+        time_in_s=all_time,
         internal_resistance_in_ohm=internal_resistance,
         **impedance_data  # Add impedance data as additional fields
     )
+
+
+def calc_Q_nasa(I, t, is_charge):
+    """Calculate capacity like CALCE dataset - similar to calc_Q function"""
+    Q = np.zeros_like(I)
+    for i in range(1, len(I)):
+        if is_charge and I[i] > 0:  # Charging current (positive)
+            Q[i] = Q[i-1] + I[i] * (t[i] - t[i-1]) / 3600
+        elif not is_charge and I[i] < 0:  # Discharging current (negative)
+            Q[i] = Q[i-1] - I[i] * (t[i] - t[i-1]) / 3600  # Note: -I[i] because current is negative
+        else:
+            Q[i] = Q[i-1]  # No change in capacity
+    return Q
