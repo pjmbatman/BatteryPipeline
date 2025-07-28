@@ -47,7 +47,15 @@ DOWNLOAD_LINKS = {
     'NASA': [
         ('https://phm-datasets.s3.amazonaws.com/NASA/5.+Battery+Data+Set.zip',
          'NASA_Battery_Dataset.zip')
-    ]
+    ],
+    'UCL': [
+        ('https://rdr.ucl.ac.uk/ndownloader/files/23140433',
+         'UCL_Battery_Dataset.zip')
+    ],
+    'EVERLASTING': [
+        ('https://data.4tu.nl/ndownloader/items/6fb69e7e-dd47-439f-b7a9-314f6b6a6d29/versions/1',
+         'EVERLASTING_Battery_Dataset.zip')
+    ],
 }
 
 
